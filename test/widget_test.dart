@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import 'package:flutter_lab_portfolio/main.dart';
+import 'package:flutter_lab_portfolio/models/network_diagnostic.dart';
 import 'package:flutter_lab_portfolio/providers/app_state_provider.dart';
 
 void main() {
@@ -42,8 +43,10 @@ void main() {
     await tester.tap(find.text('Network'));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Simulate Loss'));
     await tester.tap(find.text('Simulate Loss'));
-    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    await tester.ensureVisible(find.text('Start Request'));
     await tester.tap(find.text('Start Request'));
     await tester.pump();
 
@@ -60,5 +63,44 @@ void main() {
 
     expect(find.text('1 request sent successfully'), findsOneWidget);
     expect(find.text('Sent successfully'), findsOneWidget);
+  });
+
+  test('classifies connection health by speed and network quality', () {
+    expect(
+      classifyConnectionHealth(
+        downloadMbps: 25,
+        uploadMbps: 12,
+        averagePingMs: 40,
+        packetLossPercent: 0,
+      ),
+      ConnectionHealth.excellent,
+    );
+    expect(
+      classifyConnectionHealth(
+        downloadMbps: 6,
+        uploadMbps: 3,
+        averagePingMs: 80,
+        packetLossPercent: 0,
+      ),
+      ConnectionHealth.fair,
+    );
+    expect(
+      classifyConnectionHealth(
+        downloadMbps: 1.5,
+        uploadMbps: 1,
+        averagePingMs: 80,
+        packetLossPercent: 0,
+      ),
+      ConnectionHealth.poor,
+    );
+    expect(
+      classifyConnectionHealth(
+        downloadMbps: 20,
+        uploadMbps: 20,
+        averagePingMs: 450,
+        packetLossPercent: 0,
+      ),
+      ConnectionHealth.degraded,
+    );
   });
 }

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../models/activity.dart';
+import '../models/network_diagnostic.dart';
+import '../services/network_diagnostic_service.dart';
 
 enum NetworkStatus { checking, wifi, cellular, offline }
 
@@ -24,6 +26,12 @@ class AppStateProvider extends ChangeNotifier {
   bool _simulatedLoss = false;
   final List<NetworkRequest> _requests = [];
   final List<Timer> _requestTimers = [];
+  final NetworkDiagnosticService _diagnosticService = NetworkDiagnosticService();
+  Timer? _diagnosticTimer;
+  DiagnosticPhase _diagnosticPhase = DiagnosticPhase.idle;
+  NetworkDiagnosticResult? _diagnosticResult;
+  final List<NetworkDiagnosticResult> _diagnosticHistory = [];
+  String? _diagnosticError;
   int _sentRequestCount = 0;
   late final StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
 
@@ -46,6 +54,16 @@ class AppStateProvider extends ChangeNotifier {
       );
   List<NetworkRequest> get requests => List.unmodifiable(_requests);
   int get sentRequestCount => _sentRequestCount;
+  DiagnosticPhase get diagnosticPhase => _diagnosticPhase;
+  NetworkDiagnosticResult? get diagnosticResult => _diagnosticResult;
+  List<NetworkDiagnosticResult> get diagnosticHistory =>
+      List.unmodifiable(_diagnosticHistory);
+  String? get diagnosticError => _diagnosticError;
+  ConnectionHealth get connectionHealth =>
+      _diagnosticResult?.health ?? ConnectionHealth.unknown;
+  bool get prefersLightweightUi =>
+      connectionHealth == ConnectionHealth.poor ||
+      connectionHealth == ConnectionHealth.degraded;
 
   String get networkLabel {
     switch (networkStatus) {
@@ -64,6 +82,46 @@ class AppStateProvider extends ChangeNotifier {
     _connectivitySubscription =
         _connectivity.onConnectivityChanged.listen(_updateNetworkStatus);
     _loadInitialNetworkStatus();
+    _diagnosticTimer = Timer.periodic(const Duration(minutes: 2), (_) => runDiagnostic());
+  }
+
+  Future<void> runDiagnostic() async {
+    if (_diagnosticPhase == DiagnosticPhase.measuringIdlePing ||
+        _diagnosticPhase == DiagnosticPhase.measuringDownload ||
+        _diagnosticPhase == DiagnosticPhase.measuringUpload) {
+      return;
+    }
+    if (!isNetworkAvailable) {
+      _diagnosticError = 'Connect to Wi-Fi or cellular data before running a test.';
+      _diagnosticPhase = DiagnosticPhase.failed;
+      notifyListeners();
+      return;
+    }
+    _diagnosticError = null;
+    _diagnosticPhase = DiagnosticPhase.measuringIdlePing;
+    notifyListeners();
+    try {
+      final result = await _diagnosticService.run(onProgress: (phase) {
+        _diagnosticPhase = phase;
+        notifyListeners();
+      });
+      _diagnosticResult = result;
+      _diagnosticHistory.insert(0, result);
+      if (_diagnosticHistory.length > 10) {
+        _diagnosticHistory.removeLast();
+      }
+      _diagnosticPhase = DiagnosticPhase.complete;
+    } on Object catch (error) {
+      _diagnosticError = error.toString().replaceFirst('StateError: ', '');
+      _diagnosticPhase = DiagnosticPhase.failed;
+    }
+    notifyListeners();
+  }
+
+  void clearDiagnosticHistory() {
+    if (_diagnosticHistory.isEmpty) return;
+    _diagnosticHistory.clear();
+    notifyListeners();
   }
 
   Future<void> _loadInitialNetworkStatus() async {
@@ -146,6 +204,8 @@ class AppStateProvider extends ChangeNotifier {
   @override
   void dispose() {
     _connectivitySubscription.cancel();
+    _diagnosticTimer?.cancel();
+    _diagnosticService.dispose();
     for (final timer in _requestTimers) {
       timer.cancel();
     }
